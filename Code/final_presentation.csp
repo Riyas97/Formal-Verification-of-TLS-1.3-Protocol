@@ -1,0 +1,116 @@
+#import "PAT.Lib.MyTLS";
+﻿
+enum{
+	Nobody,
+	Client,
+	Server,
+	Hello,
+	SendCertificate,
+	SendCipherText
+};
+
+var clientConnectedTo = Nobody;
+var serverConnectedTo = Nobody;
+hvar resetClient = false;
+hvar resetServer = false;
+hvar clientSessionKey = 0;
+hvar serverSessionKey = 0;
+hvar clientPreMasterSecret = 0;
+hvar serverPreMasterSecret = 0;
+hvar KC = 0;
+hvar KS = 0;
+hvar plainText;
+hvar cipherText;
+hvar serverMsg;
+hvar G = 0;
+hvar P = 0;
+hvar publicKey = 5;
+hvar attackerSessionKey = 1;
+hvar previousClientSessionKey = 534011718;
+hvar previousServerSessionKey = 534011718;
+
+// This simple client-server model is based on the diagram found in the PDF
+channel network 0;
+
+/*
+	This client process makes an initial negotiation with the server
+*/
+
+ClientProcess() =  
+    
+    // G and P need to be prime and coprime respectively
+    // only one ciphersuite
+    generateRandom{G = call(randomG);} ->
+	generateRandomP{P = call(randomP);} -> 
+	chooseCipherSuite ->
+	network!Client.Hello -> 
+    // serverK is KS which is random
+	network?x.Hello ->
+	network?x.SendCertificate ->
+	generateKC{KC = call(random);} ->
+	encryptAndCreateMessagefromKC{cipherText = call(encrypt, call(createMsg, KC, G, P), publicKey);} ->
+	createPreMasterSecret{clientPreMasterSecret = call(createPreMasterSecret, KC, serverMsg, P);} ->
+	generateKeyFromPreMasterSecret{clientSessionKey = call(transferFunct, clientPreMasterSecret);} ->
+	network!Client.SendCipherText -> 
+    ClientConnected(x);
+    
+ClientConnected(x) = clientconnected{clientConnectedTo = x;} -> setResetClient{resetClient = true;} -> Skip;
+
+ServerProcess() = 
+
+    // server don't need to receive cipherSuite as there is only 1 here by default
+	network?x.Hello ->
+	generateKS{KS = call(random);} ->
+    createMsgFromKS{serverMsg = call(createMsg, KS, G, P);} ->
+    chooseCipherSuite ->
+	network!Server.Hello ->
+    network!Server.SendCertificate ->
+    network?x.SendCipherText ->
+    decryptCipherText{plainText = call(decrypt, cipherText);} ->
+    createPreMasterSecret{serverPreMasterSecret = call(createPreMasterSecret, KS, plainText, P);} ->
+    generateKeyFromPreMasterSecret{serverSessionKey = call(transferFunct, serverPreMasterSecret);} ->
+    ServerConnected(x);
+
+ServerConnected(x) = serverconnected{serverConnectedTo = x;} -> setResetServer{resetServer = true;} -> Skip;
+
+//Attacker can send, intercept, replay, delete
+AttackerM1Process() = AttackerM1AsClient() [] AttackerM1AsServer();
+
+AttackerM1AsServer() = network?Client.Hello -> attackerKnowsGP -> AttackerM1Process [] 
+					   network?Client.SendCipherText -> attackerKnowsCipherText -> AttackerM1Process;
+AttackerM1AsClient() = network?Server.Hello -> attackerKnowsServerMsg -> AttackerM1Process []
+					   network?Server.SendCertificate -> attckerKnowsPublicKey -> AttackerM1Process;
+
+//Attacker has private key
+AttackerM2Process() = AttackerM2AsClient() [] AttackerM2AsServer();
+
+AttackerM2AsServer() = network?Client.Hello -> attackerKnowsGP -> AttackerM2Process [] 
+					   network?Client.SendCipherText -> attackerKnowsCipherText -> attackerDecryptsCipherText -> AttackerM2Process;
+AttackerM2AsClient() = network?Server.Hello -> attackerKnowsServerMsg -> AttackerM2Process []
+					   network?Server.SendCertificate -> attckerKnowsPublicKey -> AttackerM2Process;
+
+//Attacker has KC, KS
+AttackerM3Process() = AttackerM3AsClient() [] AttackerM3AsServer();
+
+AttackerM3AsServer() = network?Client.Hello -> attackerKnowsGP -> AttackerM3Process [] 
+					   network?Client.SendCipherText -> attackerKnowsCipherText -> attackerDecryptsCipherText -> attackerKnowsKC -> AttackerM3Process;
+AttackerM3AsClient() = network?Server.Hello -> attackerKnowsServerMsg -> attackerKnowsKS -> AttackerM3Process []
+					   network?Server.SendCertificate -> attckerKnowsPublicKey -> AttackerM3Process;
+
+ResetConnection() = [resetClient && resetServer]reset{previousClientSessionKey = clientSessionKey; previousServerSessionKey = serverSessionKey; resetClient = false; resetServer = false; } -> 
+					ServerProcess() ||| ClientProcess();// ||| ResetConnection();
+
+DHE() = ServerProcess() ||| ClientProcess() ||| AttackerM1Process() ||| AttackerM2Process() ||| AttackerM3Process() ||| ResetConnection();
+
+// To verify perfect forward secrecy
+// DHE2() = ServerProcess() ||| ClientProcess() ||| AttackerM1Process() ||| AttackerM2Process() ||| AttackerM3Process();
+
+#define sameKey serverSessionKey == clientSessionKey;
+#assert DHE reaches sameKey;
+#define sessionKeyNotStolen attackerSessionKey != serverSessionKey && attackerSessionKey != clientSessionKey;
+#assert DHE |= []<> sessionKeyNotStolen;
+#define perfectForwardSecrecy resetClient && resetServer;
+#assert DHE reaches perfectForwardSecrecy;
+#define connected serverConnectedTo == Client && clientConnectedTo == Server;
+#assert DHE reaches connected;
+
