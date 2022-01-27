@@ -32,4 +32,4 @@ We used the Process Analysis Toolkit (a simulator, model checker and refinement 
 ## Requirements
 - Please ensure you have downloaded [Process Analysis Toolkit](https://pat.comp.nus.edu.sg/?page_id=2587). The user guide can be downloaded from [here](https://pat.comp.nus.edu.sg/?page_id=2611)
 
-#### For more details, please refer to the `` document.
+#### For more details, please refer to the `Final Report.pdf` document.
